@@ -6,9 +6,11 @@
 """
 
 import io
+import json
 import datetime
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -309,6 +311,65 @@ def generar_excel_bytes(pnl, fecha_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  TABLA HTML PARA OUTLOOK (se pega con formato en el correo)
+# ─────────────────────────────────────────────────────────────────────────────
+def construir_tabla_outlook(completas, pnl_total, fecha_str):
+    """Devuelve (html, texto_plano) listos para copiar al portapapeles."""
+    filas_html = ""
+    for i, (_, r) in enumerate(completas.iterrows()):
+        bg = "#FFFFFF" if i % 2 == 0 else "#F2EFF7"
+        color = "#1B6B3A" if r['PNL'] >= 0 else "#C0392B"
+        signo = "+" if r['PNL'] >= 0 else ""
+        filas_html += (
+            f'<tr style="background:{bg};">'
+            f'<td style="border:1px solid #CCCCCC;padding:5px 10px;'
+            f'font-family:Arial,sans-serif;font-size:13px;font-weight:bold;">{r["EMISORA"]}</td>'
+            f'<td style="border:1px solid #CCCCCC;padding:5px 10px;text-align:right;'
+            f'font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:{color};">'
+            f'{signo}${r["PNL"]:,.2f}</td>'
+            f'</tr>'
+        )
+
+    color_tot = "#1B6B3A" if pnl_total >= 0 else "#C0392B"
+    signo_tot = "+" if pnl_total >= 0 else ""
+    fila_total = (
+        f'<tr style="background:#EDE7F6;">'
+        f'<td style="border:2px solid #533483;padding:6px 10px;'
+        f'font-family:Arial,sans-serif;font-size:14px;font-weight:bold;">TOTAL</td>'
+        f'<td style="border:2px solid #533483;padding:6px 10px;text-align:right;'
+        f'font-family:Arial,sans-serif;font-size:14px;font-weight:bold;color:{color_tot};">'
+        f'{signo_tot}${pnl_total:,.2f}</td>'
+        f'</tr>'
+    )
+
+    html = (
+        f'<table style="border-collapse:collapse;border:1px solid #CCCCCC;">'
+        f'<thead>'
+        f'<tr><th colspan="2" style="background:#1A1A2E;color:#FFFFFF;'
+        f'padding:8px 10px;text-align:left;font-family:Arial,sans-serif;font-size:13px;">'
+        f'PNL Diario &mdash; {fecha_str} &middot; Punto Casa de Bolsa</th></tr>'
+        f'<tr>'
+        f'<th style="background:#533483;color:#FFFFFF;border:1px solid #CCCCCC;'
+        f'padding:5px 10px;text-align:left;font-family:Arial,sans-serif;font-size:12px;">EMISORA</th>'
+        f'<th style="background:#533483;color:#FFFFFF;border:1px solid #CCCCCC;'
+        f'padding:5px 10px;text-align:right;font-family:Arial,sans-serif;font-size:12px;">PNL</th>'
+        f'</tr>'
+        f'</thead><tbody>{filas_html}{fila_total}</tbody></table>'
+    )
+
+    # Texto plano (tab-separado) como respaldo
+    lineas = [f"PNL Diario — {fecha_str} · Punto Casa de Bolsa", "EMISORA\tPNL"]
+    for _, r in completas.iterrows():
+        signo = "+" if r['PNL'] >= 0 else ""
+        lineas.append(f"{r['EMISORA']}\t{signo}${r['PNL']:,.2f}")
+    signo_tot = "+" if pnl_total >= 0 else ""
+    lineas.append(f"TOTAL\t{signo_tot}${pnl_total:,.2f}")
+    texto = "\n".join(lineas)
+
+    return html, texto
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  INTERFAZ
 # ─────────────────────────────────────────────────────────────────────────────
 archivo = st.file_uploader(
@@ -346,23 +407,71 @@ if archivo is not None:
             st.warning(f"⚠ Posiciones incompletas (revisar manualmente): {inc_list}. "
                        "Aparecen en el reporte pero se excluyen del PNL Total.")
 
-        # ── Tabla en pantalla ────────────────────────────────────────────
+        # ── Tabla en pantalla (solo Emisora y PNL) ───────────────────────
         st.markdown("#### Detalle por emisora")
-        disp = pnl[['EMISORA', 'TIPO_OP', 'TITULOS', 'PPP_ENTRADA', 'PPP_SALIDA',
-                    'IMPORTE_C', 'IMPORTE_V', 'PNL', 'PNL_PCT']].copy()
-        disp.columns = ['Emisora', 'Tipo', 'Títulos', 'PPP Entrada', 'PPP Salida',
-                        'Imp. Compra', 'Imp. Venta', 'PNL ($)', 'PNL (%)']
+        disp = pnl[['EMISORA', 'PNL']].copy()
+        disp.columns = ['Emisora', 'PNL ($)']
 
         def color_pnl(v):
-            if pd.isna(v): return ''
+            if pd.isna(v):
+                return ''
             return 'color: #1B6B3A; font-weight: 700' if v >= 0 else 'color: #C0392B; font-weight: 700'
 
         styled = (disp.style
-                  .map(color_pnl, subset=['PNL ($)', 'PNL (%)'])
-                  .format({'Títulos': '{:,.0f}', 'PPP Entrada': '{:,.2f}', 'PPP Salida': '{:,.2f}',
-                           'Imp. Compra': '{:,.2f}', 'Imp. Venta': '{:,.2f}',
-                           'PNL ($)': '{:,.2f}', 'PNL (%)': '{:.2%}'}, na_rep="—"))
+                  .map(color_pnl, subset=['PNL ($)'])
+                  .format({'PNL ($)': '{:,.2f}'}, na_rep="—"))
         st.dataframe(styled, use_container_width=True, height=min(620, 60 + 35 * len(disp)))
+
+        # ── Copiar para Outlook ──────────────────────────────────────────
+        st.markdown("#### Pegar en Outlook")
+        tabla_html, tabla_texto = construir_tabla_outlook(completas, pnl_total, fecha_str)
+        html_js  = json.dumps(tabla_html)
+        text_js  = json.dumps(tabla_texto)
+
+        components.html(f"""
+        <div style="font-family:Arial,sans-serif;">
+            <button id="btnCopy" onclick="copiarOutlook()"
+                style="background:#533483;color:#fff;border:none;border-radius:8px;
+                       padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer;
+                       width:100%;">
+                📋 Copiar tabla para Outlook
+            </button>
+            <div id="status" style="margin-top:8px;font-size:13px;color:#1B6B3A;height:18px;"></div>
+            <div style="margin-top:10px;border:1px dashed #CCC;border-radius:8px;padding:10px;
+                        background:#FAFAFA;overflow:auto;">
+                <div style="font-size:11px;color:#888;margin-bottom:6px;">
+                    Vista previa (también puedes seleccionar y copiar manualmente):
+                </div>
+                <div id="preview">{tabla_html}</div>
+            </div>
+        </div>
+        <script>
+        async function copiarOutlook() {{
+            const html = {html_js};
+            const text = {text_js};
+            const status = document.getElementById('status');
+            try {{
+                const blobHtml = new Blob([html], {{type: 'text/html'}});
+                const blobText = new Blob([text], {{type: 'text/plain'}});
+                await navigator.clipboard.write([
+                    new ClipboardItem({{'text/html': blobHtml, 'text/plain': blobText}})
+                ]);
+                status.style.color = '#1B6B3A';
+                status.textContent = '✓ Copiado. Pega en Outlook con Ctrl+V (mantiene formato).';
+            }} catch (e) {{
+                // Respaldo: copiar solo texto plano
+                try {{
+                    await navigator.clipboard.writeText(text);
+                    status.style.color = '#B8860B';
+                    status.textContent = '✓ Copiado como texto. (Tu navegador no permitió el formato enriquecido.)';
+                }} catch (e2) {{
+                    status.style.color = '#C0392B';
+                    status.textContent = '✗ No se pudo copiar. Selecciona la tabla de abajo y usa Ctrl+C.';
+                }}
+            }}
+        }}
+        </script>
+        """, height=180 + 30 * min(len(completas) + 2, 16))
 
         # ── Descarga ─────────────────────────────────────────────────────
         excel_bytes = generar_excel_bytes(pnl, fecha_op)
